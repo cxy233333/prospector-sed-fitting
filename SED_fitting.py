@@ -476,8 +476,8 @@ def main(mode="dirichlet", use_spectrum=True, snr=30):
 
 if __name__ == "__main__":
     # Global settings
-    MODE = "delaytau+burst"  # SFH parameterization mode: "dirichlet", "delaytau", or "delaytau+burst"
-    USE_SPECTRUM = False     # Whether to use spectral data in fitting
+    MODE = "dirichlet"  # SFH parameterization mode: "dirichlet", "delaytau", or "delaytau+burst"
+    USE_SPECTRUM = True     # Whether to use spectral data in fitting
     SPEC_SNR = 30            # Signal-to-noise ratio for spectral uncertainties
     
     # Run main function
