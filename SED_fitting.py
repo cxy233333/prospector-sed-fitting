@@ -25,7 +25,7 @@ OUTPUT_DIR = os.path.join(os.path.expanduser("~"), "galaxy_fit_results_snr30")  
 os.makedirs(OUTPUT_DIR, exist_ok=True)  # Create output directory if it doesn't exist
 
 # Mass range for galaxy selection
-MASS_RANGE = [1e9, 10**9.0005]  # Only process galaxies with current mass between 1e9 and 1e10 solar masses
+MASS_RANGE = [1e9, 1e10]  # Only process galaxies with current mass between 1e9 and 1e10 solar masses
 
 # -------------------- HELPER FUNCTIONS --------------------
 def zfrac_constraint(z_fraction, **kwargs):
