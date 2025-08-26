@@ -225,18 +225,44 @@ def build_obs(wave, spec, phot_maggies, phot_noise, filters, use_spectrum=True, 
 
 
 def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30):
+    """
+    Fit a single galaxy's SED data using Prospector.
+    
+    Parameters
+    ----------
+    galaxy_id : int
+        ID of the galaxy to fit
+    hdf_file : h5py.File
+        HDF5 file containing galaxy data
+    mode : str
+        SFH parameterization mode
+    use_spectrum : bool
+        Whether to use spectral data in fitting
+    snr : float
+        Signal-to-noise ratio for spectral uncertainties
+        
+    Returns
+    -------
+    result : dict or None
+        Dictionary containing fitting results, or None if fitting failed
+    """
     try:
+        # Load galaxy data from HDF5 file
         grp = hdf_file[f"galaxy_{galaxy_id}"]
         wave = grp["wavelength"][()]
         spec = grp["spectrum"][()]
         phot_maggies = grp["phot_maggies"][()]
         phot_noise = grp["phot_noise"][()]
         
+        # Build observation dictionary
         obs = build_obs(wave, spec, phot_maggies, phot_noise, FILTERS,
                         use_spectrum=use_spectrum, snr=snr)
+        
+        # Build model and SPS objects
         model = build_model(mode=mode)
         sps = build_sps()
         
+        # Configure nested sampling parameters
         nested_params = {
             "dynesty": True,
             "nested_bound": "multi",
@@ -247,28 +273,35 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
             "nested_print_progress": False
         }
         
+        # Perform SED fitting
         output = fit_model(obs, model, sps, **nested_params)
         theta_labels = model.theta_labels()
         dynesty_samples = output["sampling"][0]["samples"]
         n_samples = dynesty_samples.shape[0]
-
-        mass_idx = theta_labels.index("mass")
+        
+        # Extract basic parameters
+        total_mass_idx = theta_labels.index("mass")
         logzsol_idx = theta_labels.index("logzsol")
-        formed_mass = np.median(dynesty_samples[:, mass_idx])
+        formed_mass = np.median(dynesty_samples[:, total_mass_idx])
         logzsol = np.median(dynesty_samples[:, logzsol_idx])
         
+        # Initialize result dictionary
         result = {
             "galaxy_id": galaxy_id,
             "formed_mass": formed_mass,
             "logzsol": logzsol
         }
         
+        # Process results based on SFH mode
         if mode == "dirichlet":
+            # Non-parametric SFH results
             zfrac_indices = [i for i, name in enumerate(theta_labels) if name.startswith("z_fraction_")]
             agebins_init = np.array(model.params["agebins"])
+            
+            # Calculate SFR in each age bin
             sfr_all = np.zeros((n_samples, len(agebins_init))) 
             for i in range(n_samples):
-                total_mass_i = dynesty_samples[i, mass_idx]
+                total_mass_i = dynesty_samples[i, total_mass_idx]
                 z_frac_i = dynesty_samples[i, zfrac_indices]
                 masses_i = transforms.zfrac_to_masses(
                     total_mass=total_mass_i,
@@ -278,15 +311,19 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
                 time_span = 10**agebins_init[:, 1] - 10**agebins_init[:, 0]
                 sfr_i = masses_i / time_span
                 sfr_all[i] = sfr_i
+            
+            # Calculate median SFR and uncertainties
             sfr_median = np.median(sfr_all, axis=0)
             sfr_16 = np.percentile(sfr_all, 16, axis=0)
             sfr_84 = np.percentile(sfr_all, 84, axis=0)
             sfr_err = (sfr_84 - sfr_16) / 2
-
+            
+            # Calculate current stellar mass
             theta_best = np.median(dynesty_samples, axis=0)
             _, _, pfrac = model.mean_model(theta_best, obs=obs, sps=sps)
             current_mass = formed_mass * pfrac
             
+            # Update result dictionary
             result.update({
                 "sfr2": sfr_median,
                 "sfr_err": sfr_err,
@@ -294,26 +331,38 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
             })
         
         elif mode in ["delaytau", "delaytau+burst"]:
+            # Parametric SFH results
             param_names = ["mass", "logzsol", "tage", "tau"]
             if mode == "delaytau+burst":
                 param_names += ["fburst", "fage_burst"]
+            
+            # Extract parameter values and uncertainties
             for pname in param_names:
                 idx = theta_labels.index(pname)
                 samples = dynesty_samples[:, idx]
                 result[f"{pname}_median"] = np.median(samples)
                 result[f"{pname}_err"] = (np.percentile(samples, 84) - np.percentile(samples, 16)) / 2
-
-            current_mass = formed_mass * sps.stellar_mass
-            result["current_mass"] = current_mass
             
-            if mode == "delaytau+burst":
-                tburst_val = model.params["tburst"]
-                tburst_cosmic = COSMIC_AGE - tburst_val
-                result["tburst_cosmic"] = tburst_cosmic
+            if mode == "delaytau":
+                result["current_mass"] = formed_mass
+            else:
                 fburst_idx = theta_labels.index("fburst")
                 fburst_samples = dynesty_samples[:, fburst_idx]
-                burst_mass = formed_mass * np.median(fburst_samples)
+                burst_fraction = np.median(fburst_samples)
+                result["current_mass"] = formed_mass * (1 - burst_fraction)
+                
+                burst_mass = formed_mass * burst_fraction
                 result["burst_mass"] = burst_mass
+        
+                fage_burst_idx = theta_labels.index("fage_burst")
+                fage_burst_samples = dynesty_samples[:, fage_burst_idx]
+                fage_burst_median = np.median(fage_burst_samples)
+                tage_idx = theta_labels.index("tage")
+                tage_samples = dynesty_samples[:, tage_idx]
+                tage_median = np.median(tage_samples)
+                tburst_val = fage_burst_median * tage_median
+                tburst_cosmic = COSMIC_AGE - tburst_val
+                result["tburst_cosmic"] = tburst_cosmic
         
         return result
     
