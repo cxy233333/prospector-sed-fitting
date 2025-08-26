@@ -161,14 +161,23 @@ def build_model(mode="dirichlet"):
     return SedModel(model_params)
 
 
-def build_sps():
+def build_sps(mode="dirichlet"):
     """Build the Stellar Population Synthesis (SPS) object for Prospector."""
-    sp = fsps.StellarPopulation(
-        zcontinuous=1,
-        imf_type=2,
-        sfh=0,  
-    )
-    return FastStepBasis(ssp=sp, sfh_smoothing=0.01)
+    if mode == "dirichlet":
+        # For non-parametric SFH, use FastStepBasis
+        sp = fsps.StellarPopulation(
+            zcontinuous=1,
+            imf_type=2,
+            sfh=0,  
+        )
+        return FastStepBasis(ssp=sp, sfh_smoothing=0.01)
+    else:
+        # For parametric SFH, use CSPSpecBasis
+        sp = fsps.StellarPopulation(
+            zcontinuous=1,
+            imf_type=2,
+        )
+        return CSPSpecBasis(ssp=sp)
 
 
 def build_obs(wave, spec, phot_maggies, phot_noise, filters, use_spectrum=True, snr=30):
@@ -260,7 +269,7 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
         
         # Build model and SPS objects
         model = build_model(mode=mode)
-        sps = build_sps()
+        sps = build_sps(mode=mode)
         
         # Configure nested sampling parameters
         nested_params = {
