@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from prospect.models import SedModel
 from prospect.models.templates import TemplateLibrary
-from prospect.sources import FastStepBasis
+from prospect.sources import FastStepBasis, CSPSpecBasis
 import fsps
 from prospect.fitting import fit_model
 from prospect.models.transforms import zfrac_to_masses
@@ -352,26 +352,18 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
                 result[f"{pname}_median"] = np.median(samples)
                 result[f"{pname}_err"] = (np.percentile(samples, 84) - np.percentile(samples, 16)) / 2
             
-            if mode == "delaytau":
-                result["current_mass"] = formed_mass
-            else:
-                fburst_idx = theta_labels.index("fburst")
-                fburst_samples = dynesty_samples[:, fburst_idx]
-                burst_fraction = np.median(fburst_samples)
-                result["current_mass"] = formed_mass * (1 - burst_fraction)
-                
-                burst_mass = formed_mass * burst_fraction
-                result["burst_mass"] = burst_mass
-        
-                fage_burst_idx = theta_labels.index("fage_burst")
-                fage_burst_samples = dynesty_samples[:, fage_burst_idx]
-                fage_burst_median = np.median(fage_burst_samples)
-                tage_idx = theta_labels.index("tage")
-                tage_samples = dynesty_samples[:, tage_idx]
-                tage_median = np.median(tage_samples)
-                tburst_val = fage_burst_median * tage_median
+            # current mass: formed_mass * sps.stellar_mass 
+            current_mass = formed_mass * sps.ssp.stellar_mass
+            result["current_mass"] = current_mass
+            
+            if mode == "delaytau+burst":
+                tburst_val = model.params["tburst"]
                 tburst_cosmic = COSMIC_AGE - tburst_val
                 result["tburst_cosmic"] = tburst_cosmic
+                fburst_idx = theta_labels.index("fburst")
+                fburst_samples = dynesty_samples[:, fburst_idx]
+                burst_mass = formed_mass * np.median(fburst_samples)
+                result["burst_mass"] = burst_mass
         
         return result
     
