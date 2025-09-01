@@ -90,7 +90,7 @@ def build_model(mode="dirichlet"):
             "isfree": True,
             "init": 1e9,
             "units": r"M$_\odot$",
-            "prior": priors.LogUniform(mini=1e8, maxi=1e11),
+            "prior": priors.LogUniform(mini=10**7.5, maxi=10**10.5),
         }
 
     elif mode in ["delaytau", "delaytau+burst"]:
