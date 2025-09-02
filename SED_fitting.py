@@ -21,13 +21,12 @@ import logging
 # -------------------- CONFIGURATION --------------------
 NUM_CPUS = 25  # Number of CPU cores to use for parallel processing
 SED_FILE = os.path.join(os.path.expanduser("~"), "galaxy_seds_9-10.h5")  # Input SED data file
-OUTPUT_DIR = os.path.join(os.path.expanduser("~"), "galaxy_fit_results_snr30")  # Output directory
-os.makedirs(OUTPUT_DIR, exist_ok=True)  # Create output directory if it doesn't exist
 
 # Mass range for galaxy selection
-MASS_RANGE = [1e9, 1e10]  # Only process galaxies with current mass between 1e9 and 1e10 solar masses
+MASS_RANGE = [10**9, 10**10]  # Only process galaxies with current mass between 10^9 and 10^10 solar masses
 
 # -------------------- HELPER FUNCTIONS --------------------
+
 def zfrac_constraint(z_fraction, **kwargs):
     """Constraint function for z_fraction parameter in non-parametric SFH models."""
     z_fraction = np.clip(z_fraction, 0.0, 1.0)
@@ -35,11 +34,10 @@ def zfrac_constraint(z_fraction, **kwargs):
         return np.zeros_like(z_fraction)
     return np.maximum(z_fraction, 0.0)
 
-
 def build_model(mode="dirichlet"):
     """
     Build a Prospector SED model with specified SFH parameterization.
-    
+
     Parameters
     ----------
     mode : str
@@ -47,7 +45,7 @@ def build_model(mode="dirichlet"):
         - "dirichlet": Non-parametric SFH with Dirichlet prior
         - "delaytau": Parametric delayed-tau SFH
         - "delaytau+burst": Parametric delayed-tau SFH with additional burst
-        
+
     Returns
     -------
     model : SedModel
@@ -56,34 +54,38 @@ def build_model(mode="dirichlet"):
     if mode == "dirichlet":
         # Non-parametric SFH with Dirichlet prior
         model_params = TemplateLibrary["dirichlet_sfh"]
-
+        
         # Define age bins for SFH reconstruction
         agebins = np.array([
-            [0.0, 7.6990], [7.6990, 8.0], [8.0, 8.1761], [8.1761, 8.3010],
-            [8.3010, 8.3979], [8.3979, 8.4771], [8.4771, 9.8482], [9.8482, 10.1399]
+            [0.0, 7.6990],
+            [7.6990, 8.0],
+            [8.0, 8.1761],
+            [8.1761, 8.3010],
+            [8.3010, 8.3979],
+            [8.3979, 8.4771],
+            [8.4771, 9.8482],
+            [9.8482, 10.1399]
         ])
         n_bins = len(agebins)
-
+        
         # Configure mass parameters
         model_params["mass"]["N"] = n_bins
         model_params["mass"]["init"] = np.full(n_bins, 1e8)
-
+        
         # Configure age bins
         model_params["agebins"]["N"] = n_bins
         model_params["agebins"]["init"] = agebins
-
+        
         # Configure z_fraction parameters with Dirichlet prior
         model_params["z_fraction"]["N"] = n_bins - 1
         model_params["z_fraction"]["init"] = np.full(n_bins - 1, 1.0 / (n_bins - 1))
         alpha = np.full(n_bins - 1, 5.0)
         model_params["z_fraction"]["prior"] = priors.Beta(
-            alpha=alpha,
-            beta=alpha,
-            mini=np.zeros(n_bins - 1),
-            maxi=np.ones(n_bins - 1),
+            alpha=alpha, beta=alpha,
+            mini=np.zeros(n_bins - 1), maxi=np.ones(n_bins - 1),
         )
         model_params["z_fraction"]["depends_on"] = zfrac_constraint
-
+        
         # Configure total mass parameter
         model_params["total_mass"] = {
             "N": 1,
@@ -92,11 +94,11 @@ def build_model(mode="dirichlet"):
             "units": r"M$_\odot$",
             "prior": priors.LogUniform(mini=10**7.5, maxi=10**10.5),
         }
-
+        
     elif mode in ["delaytau", "delaytau+burst"]:
         # Start from parametric SSP template
         model_params = TemplateLibrary["ssp"]
-
+        
         # Configure delayed-tau SFH
         model_params["sfh"]["init"] = 4
         model_params["tau"] = {
@@ -106,7 +108,7 @@ def build_model(mode="dirichlet"):
             "units": "Gyr",
             "prior": priors.LogUniform(mini=0.1, maxi=30.0),
         }
-
+        
         # Configure stellar mass parameter
         model_params["mass"] = {
             "N": 1,
@@ -115,7 +117,7 @@ def build_model(mode="dirichlet"):
             "units": r"M$_\odot$",
             "prior": priors.LogUniform(mini=10**7.5, maxi=10**10.5),
         }
-
+        
         if mode == "delaytau+burst":
             # Add burst parameters for burst mode
             fage_burst = {
@@ -125,7 +127,6 @@ def build_model(mode="dirichlet"):
                 "units": "time at which burst happens (fraction of tage)",
                 "prior": priors.TopHat(mini=0.5, maxi=1.0),
             }
-
             tburst = {
                 "N": 1,
                 "isfree": False,
@@ -134,7 +135,6 @@ def build_model(mode="dirichlet"):
                 "prior": None,
                 "depends_on": transforms.tburst_from_fage,
             }
-
             fburst = {
                 "N": 1,
                 "isfree": True,
@@ -142,24 +142,22 @@ def build_model(mode="dirichlet"):
                 "units": "fraction of total mass formed in the burst",
                 "prior": priors.TopHat(mini=0.0, maxi=0.5),
             }
-
             model_params.update({
                 "tburst": tburst,
                 "fburst": fburst,
                 "fage_burst": fage_burst,
             })
-
+            
     else:
         raise ValueError(f"Unknown mode: {mode}")
-
+    
     # Common parameters for all models
     model_params["lumdist"] = {"N": 1, "isfree": False, "init": 1e-5, "units": "Mpc"}
     model_params["zred"]["init"] = 0.0
     model_params["dust2"]["init"] = 0.0
     model_params["dust2"]["isfree"] = False
-
+    
     return SedModel(model_params)
-
 
 def build_sps(mode="dirichlet"):
     """Build the Stellar Population Synthesis (SPS) object for Prospector."""
@@ -168,7 +166,7 @@ def build_sps(mode="dirichlet"):
         sp = fsps.StellarPopulation(
             zcontinuous=1,
             imf_type=2,
-            sfh=0,  
+            sfh=0,
         )
         return FastStepBasis(ssp=sp, sfh_smoothing=0.01)
     else:
@@ -179,11 +177,10 @@ def build_sps(mode="dirichlet"):
         )
         return CSPSpecBasis(ssp=sp)
 
-
 def build_obs(wave, spec, phot_maggies, phot_noise, filters, use_spectrum=True, snr=30):
     """
     Build observation dictionary for Prospector fitting.
-    
+
     Parameters
     ----------
     wave : array-like
@@ -200,7 +197,7 @@ def build_obs(wave, spec, phot_maggies, phot_noise, filters, use_spectrum=True, 
         Whether to include spectral data in fitting
     snr : float
         Signal-to-noise ratio to scale the spectral uncertainties
-        
+
     Returns
     -------
     obs : dict
@@ -232,11 +229,10 @@ def build_obs(wave, spec, phot_maggies, phot_noise, filters, use_spectrum=True, 
     
     return obs
 
-
 def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30):
     """
     Fit a single galaxy's SED data using Prospector.
-    
+
     Parameters
     ----------
     galaxy_id : int
@@ -249,7 +245,7 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
         Whether to use spectral data in fitting
     snr : float
         Signal-to-noise ratio for spectral uncertainties
-        
+
     Returns
     -------
     result : dict or None
@@ -264,8 +260,7 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
         phot_noise = grp["phot_noise"][()]
         
         # Build observation dictionary
-        obs = build_obs(wave, spec, phot_maggies, phot_noise, FILTERS,
-                        use_spectrum=use_spectrum, snr=snr)
+        obs = build_obs(wave, spec, phot_maggies, phot_noise, FILTERS, use_spectrum=use_spectrum, snr=snr)
         
         # Build model and SPS objects
         model = build_model(mode=mode)
@@ -276,7 +271,7 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
             "dynesty": True,
             "nested_bound": "multi",
             "nested_sample": "rwalk",
-            "nested_dlogz": 0.05,  
+            "nested_dlogz": 0.05,
             "nested_walks": 200,
             "output_posterior": True,
             "nested_print_progress": False
@@ -308,7 +303,7 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
             agebins_init = np.array(model.params["agebins"])
             
             # Calculate SFR in each age bin
-            sfr_all = np.zeros((n_samples, len(agebins_init))) 
+            sfr_all = np.zeros((n_samples, len(agebins_init)))
             for i in range(n_samples):
                 total_mass_i = dynesty_samples[i, total_mass_idx]
                 z_frac_i = dynesty_samples[i, zfrac_indices]
@@ -338,7 +333,7 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
                 "sfr_err": sfr_err,
                 "current_mass": current_mass
             })
-        
+            
         elif mode in ["delaytau", "delaytau+burst"]:
             # Parametric SFH results
             param_names = ["mass", "logzsol", "tage", "tau"]
@@ -352,7 +347,7 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
                 result[f"{pname}_median"] = np.median(samples)
                 result[f"{pname}_err"] = (np.percentile(samples, 84) - np.percentile(samples, 16)) / 2
             
-            # current mass: formed_mass * sps.stellar_mass 
+            # current mass: formed_mass * sps.stellar_mass
             current_mass = formed_mass * sps.ssp.stellar_mass
             result["current_mass"] = current_mass
             
@@ -360,28 +355,28 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
                 tburst_val = model.params["tburst"]
                 tburst_cosmic = COSMIC_AGE - tburst_val
                 result["tburst_cosmic"] = tburst_cosmic
+                
                 fburst_idx = theta_labels.index("fburst")
                 fburst_samples = dynesty_samples[:, fburst_idx]
                 burst_mass = formed_mass * np.median(fburst_samples)
                 result["burst_mass"] = burst_mass
         
         return result
-    
+        
     except Exception as e:
         print(f"Error fitting galaxy {galaxy_id}: {str(e)}")
         traceback.print_exc()
         return None
 
-
 def process_galaxy_wrapper(args):
     """
     Wrapper function for parallel processing of galaxy fitting.
-    
+
     Parameters
     ----------
     args : tuple
         Tuple containing (galaxy_id, hdf_path, mode, use_spectrum, snr)
-        
+
     Returns
     -------
     result : dict or None
@@ -391,18 +386,41 @@ def process_galaxy_wrapper(args):
     try:
         with h5py.File(hdf_path, 'r') as hdf:
             if f"galaxy_{galaxy_id}" in hdf:
-                return fit_galaxy(galaxy_id, hdf, mode=mode,
-                                  use_spectrum=use_spectrum, snr=snr)
+                return fit_galaxy(galaxy_id, hdf, mode=mode, use_spectrum=use_spectrum, snr=snr)
         return None
     except Exception as e:
         print(f"Error processing galaxy {galaxy_id}: {str(e)}")
         return None
 
+def format_mass_range(mass_range):
+    """
+    Format mass range for use in filename.
+    
+    Parameters
+    ----------
+    mass_range : list
+        List containing [min_mass, max_mass]
+        
+    Returns
+    -------
+    formatted_str : str
+        Formatted string representation of mass range
+    """
+    min_mass, max_mass = mass_range
+    min_exp = np.log10(min_mass)
+    max_exp = np.log10(max_mass)
+    
+    # Check if exponents are integers
+    if min_exp.is_integer() and max_exp.is_integer():
+        return f"mass_10e{int(min_exp)}_to_10e{int(max_exp)}"
+    else:
+        # Format with one decimal place for non-integer exponents
+        return f"mass_10e{min_exp:.1f}_to_10e{max_exp:.1f}"
 
 def main(mode="dirichlet", use_spectrum=True, snr=30):
     """
     Main function to perform SED fitting for multiple galaxies.
-    
+
     Parameters
     ----------
     mode : str
@@ -436,12 +454,12 @@ def main(mode="dirichlet", use_spectrum=True, snr=30):
                     galaxy_ids.append(galaxy_id)
     
     galaxy_ids = sorted(galaxy_ids)
-    
     print(f"Found {len(galaxy_ids)} galaxies in mass range {MASS_RANGE} in {SED_FILE}")
     
     # Prepare tasks for parallel processing
     tasks = [(gid, SED_FILE, mode, use_spectrum, snr) for gid in galaxy_ids]
     all_results = []
+    
     print(f"Starting fitting with {NUM_CPUS} CPUs...")
     
     # Use ProcessPoolExecutor for parallel processing
@@ -466,9 +484,13 @@ def main(mode="dirichlet", use_spectrum=True, snr=30):
         # Convert to DataFrame
         results_df = pd.DataFrame(all_results)
         
-        # Save to CSV
-        output_filename = f"all_galaxies_{mode}_fit_results.csv"
-        output_path = os.path.join(OUTPUT_DIR, output_filename)
+        # Build output filename with all parameters
+        spec_info = f"spec_snr_{snr}" if use_spectrum else "no_spec"
+        mass_range_info = format_mass_range(MASS_RANGE)
+        
+        output_filename = f"galaxy_fits_{mode}_{spec_info}_{mass_range_info}.csv"
+        output_path = os.path.join(os.path.expanduser("~"), output_filename)
+        
         results_df.to_csv(output_path, index=False)
         print(f"Saved all results to {output_path}")
     else:
@@ -477,12 +499,11 @@ def main(mode="dirichlet", use_spectrum=True, snr=30):
     end_time = time.time()
     print(f"Completed fitting in {end_time - start_time:.2f} seconds")
 
-
 if __name__ == "__main__":
     # Global settings
     MODE = "dirichlet"  # SFH parameterization mode: "dirichlet", "delaytau", or "delaytau+burst"
-    USE_SPECTRUM = True     # Whether to use spectral data in fitting
-    SPEC_SNR = 30            # Signal-to-noise ratio for spectral uncertainties
+    USE_SPECTRUM = True  # Whether to use spectral data in fitting
+    SPEC_SNR = 30  # Signal-to-noise ratio for spectral uncertainties
     
     # Run main function
     main(mode=MODE, use_spectrum=USE_SPECTRUM, snr=SPEC_SNR)
