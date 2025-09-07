@@ -258,14 +258,14 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
         spec = grp["spectrum"][()]
         phot_maggies = grp["phot_maggies"][()]
         phot_noise = grp["phot_noise"][()]
-        
+
         # Build observation dictionary
         obs = build_obs(wave, spec, phot_maggies, phot_noise, FILTERS, use_spectrum=use_spectrum, snr=snr)
-        
+
         # Build model and SPS objects
         model = build_model(mode=mode)
         sps = build_sps(mode=mode)
-        
+
         # Configure nested sampling parameters
         nested_params = {
             "dynesty": True,
@@ -276,26 +276,49 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
             "output_posterior": True,
             "nested_print_progress": False
         }
-        
+
         # Perform SED fitting
         output = fit_model(obs, model, sps, **nested_params)
         theta_labels = model.theta_labels()
         dynesty_samples = output["sampling"][0]["samples"]
         n_samples = dynesty_samples.shape[0]
+
+        # Determine the correct mass parameter name based on mode
+        if mode == "dirichlet":
+            mass_param_name = "total_mass"
+        else:
+            mass_param_name = "mass"
         
+        # Get indices for parameters
+        try:
+            total_mass_idx = theta_labels.index(mass_param_name)
+        except ValueError:
+            print(f"Parameter '{mass_param_name}' not found in theta_labels for galaxy {galaxy_id}.")
+            print(f"Available parameters: {theta_labels}")
+            return None
+        
+        try:
+            logzsol_idx = theta_labels.index("logzsol")
+        except ValueError:
+            print(f"Parameter 'logzsol' not found in theta_labels for galaxy {galaxy_id}.")
+            logzsol_idx = None
+
         # Extract basic parameters
-        total_mass_idx = theta_labels.index("mass")
-        logzsol_idx = theta_labels.index("logzsol")
         formed_mass = np.median(dynesty_samples[:, total_mass_idx])
-        logzsol = np.median(dynesty_samples[:, logzsol_idx])
         
+        if logzsol_idx is not None:
+            logzsol = np.median(dynesty_samples[:, logzsol_idx])
+        else:
+            # If logzsol is not a free parameter, use the initial value
+            logzsol = model.params["logzsol"]["init"]
+
         # Initialize result dictionary
         result = {
             "galaxy_id": galaxy_id,
             "formed_mass": formed_mass,
             "logzsol": logzsol
         }
-        
+
         # Process results based on SFH mode
         if mode == "dirichlet":
             # Non-parametric SFH results
@@ -308,8 +331,8 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
                 total_mass_i = dynesty_samples[i, total_mass_idx]
                 z_frac_i = dynesty_samples[i, zfrac_indices]
                 masses_i = transforms.zfrac_to_masses(
-                    total_mass=total_mass_i,
-                    z_fraction=z_frac_i,
+                    total_mass=total_mass_i, 
+                    z_fraction=z_frac_i, 
                     agebins=agebins_init
                 )
                 time_span = 10**agebins_init[:, 1] - 10**agebins_init[:, 0]
@@ -322,7 +345,7 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
             sfr_84 = np.percentile(sfr_all, 84, axis=0)
             sfr_err = (sfr_84 - sfr_16) / 2
             
-            # Calculate current stellar mass
+            # Calculate current stellar mass using pfrac method (consistent with dirichlet approach)
             theta_best = np.median(dynesty_samples, axis=0)
             _, _, pfrac = model.mean_model(theta_best, obs=obs, sps=sps)
             current_mass = formed_mass * pfrac
@@ -342,24 +365,37 @@ def fit_galaxy(galaxy_id, hdf_file, mode="dirichlet", use_spectrum=True, snr=30)
             
             # Extract parameter values and uncertainties
             for pname in param_names:
-                idx = theta_labels.index(pname)
-                samples = dynesty_samples[:, idx]
-                result[f"{pname}_median"] = np.median(samples)
-                result[f"{pname}_err"] = (np.percentile(samples, 84) - np.percentile(samples, 16)) / 2
+                try:
+                    idx = theta_labels.index(pname)
+                    samples = dynesty_samples[:, idx]
+                    result[f"{pname}_median"] = np.median(samples)
+                    result[f"{pname}_err"] = (np.percentile(samples, 84) - np.percentile(samples, 16)) / 2
+                except ValueError:
+                    print(f"Parameter '{pname}' not found in theta_labels for galaxy {galaxy_id}.")
+                    result[f"{pname}_median"] = np.nan
+                    result[f"{pname}_err"] = np.nan
             
-            # current mass: formed_mass * sps.stellar_mass
-            current_mass = formed_mass * sps.ssp.stellar_mass
+            # Calculate current mass using pfrac method for consistency with dirichlet approach
+            theta_best = np.median(dynesty_samples, axis=0)
+            _, _, pfrac = model.mean_model(theta_best, obs=obs, sps=sps)
+            current_mass = formed_mass * pfrac
             result["current_mass"] = current_mass
             
             if mode == "delaytau+burst":
-                tburst_val = model.params["tburst"]
-                tburst_cosmic = COSMIC_AGE - tburst_val
-                result["tburst_cosmic"] = tburst_cosmic
-                
-                fburst_idx = theta_labels.index("fburst")
-                fburst_samples = dynesty_samples[:, fburst_idx]
-                burst_mass = formed_mass * np.median(fburst_samples)
-                result["burst_mass"] = burst_mass
+                # Calculate burst-related parameters
+                try:
+                    tburst_val = model.params["tburst"]
+                    tburst_cosmic = COSMIC_AGE - tburst_val
+                    result["tburst_cosmic"] = tburst_cosmic
+                    
+                    fburst_idx = theta_labels.index("fburst")
+                    fburst_samples = dynesty_samples[:, fburst_idx]
+                    burst_mass = formed_mass * np.median(fburst_samples)
+                    result["burst_mass"] = burst_mass
+                except (ValueError, KeyError) as e:
+                    print(f"Error calculating burst parameters for galaxy {galaxy_id}: {str(e)}")
+                    result["tburst_cosmic"] = np.nan
+                    result["burst_mass"] = np.nan
         
         return result
         
